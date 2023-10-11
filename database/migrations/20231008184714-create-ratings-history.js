@@ -1,9 +1,8 @@
-'use strict'
 /** @type {import('sequelize-cli').Migration} */
 
 module.exports = {
   async up (queryInterface, Sequelize) {
-    await queryInterface.createTable('Ratings', {
+    await queryInterface.createTable('RatingsHistory', {
       id: {
         allowNull: false,
         autoIncrement: true,
@@ -38,22 +37,12 @@ module.exports = {
         allowNull: false,
         defaultValue: 0
       },
-      winner_count: {
-        type: Sequelize.INTEGER,
-        allowNull: false,
-        defaultValue: 0
-      },
       rating: {
         type: Sequelize.INTEGER,
         allowNull: false,
         defaultValue: 0
       },
       volatility: {
-        type: Sequelize.INTEGER,
-        allowNull: false,
-        defaultValue: 0
-      },
-      ratings_count: {
         type: Sequelize.INTEGER,
         allowNull: false,
         defaultValue: 0
@@ -68,13 +57,13 @@ module.exports = {
       }
     })
 
-    queryInterface.addConstraint('Ratings', {
+    queryInterface.addConstraint('RatingsHistory', {
       type: 'primary key',
-      name: 'Ratings_pkey',
-      fields: ['member_id', 'rating_type_id']
+      name: 'RatingsHistory_pkey',
+      fields: ['member_id', 'rating_type_id', 'challenge_id']
     })
   },
   async down (queryInterface, Sequelize) {
-    await queryInterface.dropTable('Ratings')
+    await queryInterface.dropTable('RatingsHistory')
   }
 }

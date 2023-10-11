@@ -1,4 +1,6 @@
 const dbConfig = require('../../config/db.config')
+
+const cls = require('cls-hooked')
 const fs = require('fs')
 const path = require('path')
 const Sequelize = require('sequelize')
@@ -6,6 +8,9 @@ const Sequelize = require('sequelize')
 const basename = path.basename(__filename)
 
 const db = {}
+
+const namespace = cls.createNamespace('tc-ratings-service-namespace')
+Sequelize.useCLS(namespace)
 
 const sequelize = new Sequelize(dbConfig.database, dbConfig.username, dbConfig.password, {
   host: dbConfig.host,

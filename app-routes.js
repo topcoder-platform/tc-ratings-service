@@ -3,6 +3,7 @@ const authenticator = require('tc-core-library-js').middleware.jwtAuthenticator
 const config = require('config')
 const { statusCodes } = require('http-status-codes')
 
+const errorMiddleware = require('./src/common/error.middleware')
 const helper = require('./src/common/helper')
 const errors = require('./src/common/errors')
 const routes = require('./src/routes')
@@ -95,6 +96,8 @@ module.exports = (app) => {
       app[verb](`/${config.API_VERSION}${path}`, helper.autoWrapExpress(actions))
     })
   })
+
+  app.use(errorMiddleware())
 
   // Check if the route is not found or HTTP method is not supported
   app.use('*', (req, res) => {

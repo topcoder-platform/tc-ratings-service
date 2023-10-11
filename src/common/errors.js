@@ -1,41 +1,28 @@
 /**
- * This file defines application errors
+ * errors defined
  */
-const util = require('util')
 
 /**
- * Helper function to create generic error object with http status code
- * @param {String} name the error name
- * @param {Number} statusCode the http status code
- * @returns {Function} the error constructor
- * @private
+ * the base error class
  */
-function createError (name, statusCode) {
-  /**
-   * The error constructor
-   * @param {String} message the error message
-   * @param {String} [cause] the error cause
-   * @constructor
-   */
-  function ErrorCtor (message, cause) {
-    Error.call(this)
-    Error.captureStackTrace(this)
-    this.message = message || name
-    this.cause = cause
-    this.httpStatus = statusCode
+class AppError extends Error {
+  constructor (status, message) {
+    super()
+    this.status = status
+    this.message = message || 'unknown exception'
   }
-
-  util.inherits(ErrorCtor, Error)
-  ErrorCtor.prototype.name = name
-  return ErrorCtor
 }
 
 module.exports = {
-  BadRequestError: createError('BadRequestError', 400),
-  UnauthorizedError: createError('UnauthorizedError', 401),
-  ForbiddenError: createError('ForbiddenError', 403),
-  NotFoundError: createError('NotFoundError', 404),
-  ConflictError: createError('ConflictError', 409),
-  ServiceUnavailableError: createError('ServiceUnavailableError', 503),
-  InternalServerError: createError('InternalServerError', 500)
+  newBadRequestError: (msg) => new AppError(
+    400,
+    msg || 'The request could not be interpreted correctly or some required parameters were missing.'
+  ),
+  ForbiddenError: msg => new AppError(403, msg || 'Forbidden'),
+  NotFoundError: msg => new AppError(404, msg || 'Not Found'),
+  newEntityNotFoundError: msg => new AppError(404, msg || 'The entity does not exist.'),
+  newAuthError: msg => new AppError(401, msg || 'Auth failed.'),
+  newPermissionError: msg => new AppError(403, msg || 'The entity does not exist.'),
+  newConflictError: msg => new AppError(409, msg || 'The entity does not exist.'),
+  deleteConflictError: msg => new AppError(400, msg || 'Please delete child records first')
 }

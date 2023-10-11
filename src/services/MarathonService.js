@@ -2,13 +2,11 @@ const _ = require('lodash')
 const config = require('config')
 const logger = require('tc-framework').logger(config)
 
+const errors = require('../common/errors')
+const helper = require('../common/helper')
 const db = require('../models')
 
-const helper = require('../common/helper')
-const { lowerCase } = require('lodash')
-
 const INITIAL_RATING = 1200
-const ONE_STD_DEV_EQUALS = 1200
 const INITIAL_VOL = 515
 
 const INITIAL_WEIGHT = 0.6
@@ -21,45 +19,79 @@ const FIRST_VOLATILITY = 385
  * @param {Object} data data object from the request (contains challengeId)
  * @returns {Promise<Object>} success message of the calculated ratings
  */
-async function calculate(data) {
+async function calculate (data) {
   try {
     logger.info(`=== start: mm ratings calcualtion for challenge ${data.challengeId}`)
     const finalSubmissions = await helper.getFinalSubmissions(data.challengeId)
 
     // fetch the current ratings of the members
-    let currentRatings = []
+    const currentRatings = []
 
-    for (const sub in finalSubmissions) {
-      logger.debug(`fetching members data for ${finalSubmissions[sub].memberId}`)
-      const retValue = await db.Ratings.findOne({
+    // existing rating records to create the rating history
+    const ratingsHistoryRecords = []
+
+    for (const sub of finalSubmissions) {
+      logger.debug(`fetching members data for ${sub.memberId}`)
+      const Rating = await db.Ratings.findOne({
         attributes: [
+          'member_id',
+          'challenge_id',
+          'submission_id',
+          'rank',
+          'score',
           'rating',
           'volatility',
           'ratings_count',
-          'member_id'
+          'rating_type_id',
+          'winner_count'
         ],
         where: {
-          member_id: finalSubmissions[sub].memberId,
+          member_id: sub.memberId,
           rating_type_id: 'MM'
         }
       })
 
-      if (retValue === null) {
-        currentRatings = _.concat(currentRatings, {
-          rating: INITIAL_RATING,
-          volatility: INITIAL_VOL,
-          ratings_count: 0,
-          member_id: finalSubmissions[sub].memberId,
-          finalScore: finalSubmissions[sub].finalScore,
+      if (Rating !== null) {
+        ratingsHistoryRecords.push({
+          member_id: Rating.member_id,
+          rating_type_id: Rating.rating_type_id,
+          challenge_id: Rating.challenge_id,
+          submission_id: Rating.submission_id,
+          score: Rating.score,
+          rank: Rating.rank,
+          rating: Rating.rating,
+          volatility: Rating.volatility
+        })
+
+        currentRatings.push({
+          member_id: Rating.member_id,
+          rating_type_id: Rating.rating_type_id,
+          challenge_id: data.challengeId,
+          submission_id: sub.submissionId,
+          score: sub.finalScore,
+          rank: 0,
+          rating: Rating.rating,
+          volatility: Rating.volatility,
+          ratings_count: Rating.ratings_count,
+          winner_count: Rating.winner_count,
           arank: 0,
           aperf: 0
         })
       } else {
-        const data = retValue.get({ plain: true })
-        data.finalScore = finalSubmissions[sub].finalScore
-        data.arank = 0
-        data.aperf = 0
-        currentRatings = _.concat(currentRatings, data)
+        currentRatings.push({
+          member_id: sub.memberId,
+          rating_type_id: 'MM',
+          challenge_id: data.challengeId,
+          submission_id: sub.submissionId,
+          score: sub.finalScore,
+          rank: 0,
+          rating: INITIAL_RATING,
+          volatility: INITIAL_VOL,
+          ratings_count: 0,
+          winner_count: 0,
+          arank: 0,
+          aperf: 0
+        })
       }
     }
 
@@ -68,27 +100,44 @@ async function calculate(data) {
     logger.debug(`average ratings = ${averageRating}`)
 
     // calculate competition factor
-    const compFactor = await calculateCompetitionFactor(currentRatings)
+    const compFactor = calculateCompetitionFactor(currentRatings)
     logger.debug(`competition factor = ${compFactor}`)
 
     // calculate expected rank
-    await expectedRanks(currentRatings)
+    expectedRanks(currentRatings)
 
     // calculate actual rank
-    await actualRanks(currentRatings)
+    actualRanks(currentRatings)
 
-    // update ratings
-    await calculateRatings(currentRatings, compFactor)
+    // calcualte ratings
+    calculateRatings(currentRatings, compFactor)
+
+    // update the rating rcecords
+    for (const data of currentRatings) {
+      data.rating = data.newRating
+      data.volatility = data.newVolatility
+      data.ratings_count = data.ratings_count + 1
+
+      if (data.rank === 1) {
+        data.winner_count = data.winner_count + 1
+      }
+    }
+
+    // update db records for ratings and ratingsHitory
+    await updateRatings(currentRatings, ratingsHistoryRecords)
+
+    logger.debug(' === end: update ratings data ===')
 
     logger.debug('returning final result')
     return currentRatings
   } catch (err) {
-
-    // next(err)
+    logger.error(err)
+    throw err
   }
 }
 
-async function calculateCompetitionFactor (data) {
+function calculateCompetitionFactor (data) {
+  logger.debug(' === start: calculate competition factor ===')
   let rTemp = 0
   let vTemp = 0
 
@@ -97,10 +146,53 @@ async function calculateCompetitionFactor (data) {
     rTemp += Math.pow(data[x].rating, 2)
   }
 
+  logger.debug(' === end: calculate competition factor ===')
   return Math.sqrt(vTemp / data.length + rTemp / (data.length - 1))
 }
 
-async function calculateRatings (data, compFactor) {
+function expectedRanks (data) {
+  logger.debug(' === start: calculate expected ranks ===')
+  for (let x = 0; x < data.length; x++) {
+    let est = 0.5
+
+    for (let y = 0; y < data.length; y++) {
+      est += winProbability(data[y].rating, data[x].rating, data[y].volatility, data[x].volatility)
+    }
+
+    data[x].erank = est
+    data[x].eperf = -(normSInv((est - 0.5) / data.length))
+  }
+  logger.debug(' === end: calculate expected ranks ===')
+}
+
+function actualRanks (data) {
+  logger.debug(' === start: calculate actual ranks ===')
+  for (let x = 0; x < data.length;) {
+    let max = Number.NEGATIVE_INFINITY
+    let count = 0
+
+    for (let y = 0; y < data.length; y++) {
+      if (data[y].score >= max && data[y].arank === 0) {
+        count = data[y].score === max ? count + 1 : 1
+        max = data[y].score
+      }
+    }
+
+    for (let y = 0; y < data.length; y++) {
+      if (data[y].score === max) {
+        data[y].arank = x + 0.5 + count / 2
+        data[y].rank = data[y].arank
+        data[y].aperf = -(normSInv((x + count / 2) / data.length))
+      }
+    }
+
+    x += count
+  }
+  logger.debug(' === end: calculate actual ranks ===')
+}
+
+function calculateRatings (data, compFactor) {
+  logger.debug(' === start: calculate new ratings ===')
   for (let x = 0; x < data.length; x++) {
     const diff = data[x].aperf - data[x].eperf
     const oldRating = data[x].rating
@@ -145,46 +237,56 @@ async function calculateRatings (data, compFactor) {
       data[x].newVolatility = FIRST_VOLATILITY
     }
   }
+  logger.debug(' === start: calculate new ratings ===')
 }
 
-async function expectedRanks (data) {
-  logger.debug(' === start: calculate expected ranks ===')
-  for (let x = 0; x < data.length; x++) {
-    let est = 0.5
+async function updateRatings (currentRatings, ratingsHistoryRecords) {
+  try {
+    return await db.sequelize.transaction(async transaction => {
+      for (const rating of currentRatings) {
+        const recToUpdate = await db.Ratings.findOne({
+          where: {
+            rating_type_id: rating.rating_type_id,
+            member_id: rating.member_id
+          }
+        })
 
-    for (let y = 0; y < data.length; y++) {
-      est += winProbability(data[y].rating, data[x].rating, data[y].volatility, data[x].volatility)
-    }
+        if (recToUpdate !== null) {
+          recToUpdate.challengeId = rating.challenge_id
+          recToUpdate.challenge_id = rating.challenge_id
+          recToUpdate.submission_id = rating.submission_id
+          recToUpdate.score = rating.score
+          recToUpdate.rank = rating.rank
+          recToUpdate.winner_count = rating.winner_count
+          recToUpdate.rating = rating.rating
+          recToUpdate.volatility = rating.volatility
+          recToUpdate.ratings_count = rating.ratings_count
 
-    data[x].erank = est
-    data[x].eperf = -(await normSInv((est - 0.5) / data.length))
-  }
-  logger.debug(' === end: calculate expected ranks ===')
-}
-
-async function actualRanks (data) {
-  logger.debug(' === start: calculate actual ranks ===')
-  for (let x = 0; x < data.length;) {
-    let max = Number.NEGATIVE_INFINITY
-    let count = 0
-
-    for (let y = 0; y < data.length; y++) {
-      if (data[y].finalScore >= max && data[y].arank === 0) {
-        count = data[y].finalScore === max ? count + 1 : 1
-        max = data[y].finalScore
+          await recToUpdate.save()
+        } else {
+          await db.Ratings.create({
+            rating_type_id: rating.rating_type_id,
+            member_id: rating.member_id,
+            challenge_id: rating.challenge_id,
+            submission_id: rating.submission_id,
+            score: rating.score,
+            rank: rating.rank,
+            winner_count: rating.winner_count,
+            rating: rating.rating,
+            volatility: rating.volatility,
+            ratings_count: rating.ratings_count
+          })
+        }
       }
-    }
 
-    for (let y = 0; y < data.length; y++) {
-      if (data[y].finalScore === max) {
-        data[y].arank = x + 0.5 + count / 2
-        data[y].aperf = -(await normSInv((x + count / 2) / data.length))
-      }
-    }
-
-    x += count
+      await db.RatingsHistory.bulkCreate(ratingsHistoryRecords, {
+        include: [db.Member]
+      })
+    })
+  } catch (err) {
+    logger.error(err)
+    throw errors.newBadRequestError(err.message)
   }
-  logger.debug(' === end: calculate actual ranks ===')
 }
 
 function winProbability (r1, r2, v1, v2) {

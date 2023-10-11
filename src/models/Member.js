@@ -1,5 +1,3 @@
-'use strict'
-
 const { Model } = require('sequelize')
 
 module.exports = (sequelize, DataTypes) => {
@@ -16,6 +14,12 @@ module.exports = (sequelize, DataTypes) => {
         as: 'ratings',
         onDelete: 'CASCADE'
       })
+
+      this.hasMany(models.RatingsHistory, {
+        foreignKey: 'member_id',
+        as: 'ratingsHistory',
+        onDelete: 'CASCADE'
+      })
     }
   }
   Member.init({
@@ -28,7 +32,8 @@ module.exports = (sequelize, DataTypes) => {
   }, {
     sequelize,
     modelName: 'Member',
-    timestamps: true
+    timestamps: true,
+    freezeTableName: true
   })
 
   Member.removeAttribute('id')
